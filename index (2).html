@@ -1,0 +1,1018 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Tank Battle Ultimate</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background: #111;
+            font-family: 'Arial', sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+        }
+        #game {
+            display: none;
+            background: #000;
+            box-shadow: 0 0 20px rgba(0, 150, 255, 0.5);
+        }
+        #ui {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            color: white;
+            font-size: 20px;
+            text-shadow: 0 0 5px black;
+            padding: 5px 10px;
+            background: rgba(0, 0, 0, 0.5);
+            border-radius: 5px;
+        }
+        #menu {
+            text-align: center;
+            color: white;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 30px;
+            border-radius: 15px;
+            box-shadow: 0 0 30px rgba(0, 150, 255, 0.7);
+        }
+        #menu h1 {
+            color: #FF5252;
+            font-size: 48px;
+            text-shadow: 0 0 10px #FF5252;
+            margin-bottom: 30px;
+        }
+        .btn {
+            background: linear-gradient(to bottom, #4CAF50, #2E7D32);
+            border: none;
+            color: white;
+            padding: 15px 30px;
+            margin: 10px;
+            font-size: 18px;
+            cursor: pointer;
+            border-radius: 5px;
+            transition: all 0.3s;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3);
+        }
+        .btn:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 8px 20px rgba(0, 0, 0, 0.4);
+        }
+        .btn:active {
+            transform: translateY(1px);
+        }
+        .powerup {
+            position: absolute;
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            animation: pulse 1s infinite;
+        }
+        @keyframes pulse {
+            0% { transform: scale(1); opacity: 1; }
+            50% { transform: scale(1.3); opacity: 0.8; }
+            100% { transform: scale(1); opacity: 1; }
+        }
+        .health-bar {
+            height: 5px;
+            background: red;
+            position: absolute;
+            top: -10px;
+            left: 0;
+            transition: width 0.3s;
+        }
+    </style>
+</head>
+<body>
+    <div id="menu">
+        <h1>TANK BATTLE ULTIMATE</h1>
+        <button class="btn" onclick="startGame('pvp')">ИГРАТЬ ВДВОЁМ</button>
+        <button class="btn" onclick="startGame('pve')">ИГРАТЬ С БОТОМ</button>
+        <p>Управление: WASD + F (синий) / Стрелки + Пробел (красный)</p>
+    </div>
+    <canvas id="game"></canvas>
+    <div id="ui"></div>
+
+    <script>
+        // Инициализация
+        const canvas = document.getElementById('game');
+        const ctx = canvas.getContext('2d');
+        const menu = document.getElementById('menu');
+        const ui = document.getElementById('ui');
+        
+        canvas.width = 1000;
+        canvas.height = 700;
+
+        // Игровые переменные
+        const keys = {};
+        let gameOver = false;
+        let powerups = [];
+        let particles = [];
+        let lastPowerupTime = 0;
+        let gameMode = '';
+        let botInterval;
+        let botDifficulty = 0.7; // 0-1 (сложность)
+
+        // Танки
+        const tanks = [
+            {
+                x: 150,
+                y: 150,
+                width: 40,
+                height: 40,
+                color: '#FF5252',
+                speed: 3.5,
+                direction: 0,
+                cooldown: 0,
+                health: 5,
+                maxHealth: 5,
+                score: 0,
+                controls: {
+                    up: 'ArrowUp',
+                    down: 'ArrowDown',
+                    left: 'ArrowLeft',
+                    right: 'ArrowRight',
+                    fire: 'Space'
+                },
+                powerups: {},
+                name: 'Игрок 1'
+            },
+            {
+                x: 850,
+                y: 550,
+                width: 40,
+                height: 40,
+                color: '#4FC3F7',
+                speed: 3.5,
+                direction: Math.PI,
+                cooldown: 0,
+                health: 5,
+                maxHealth: 5,
+                score: 0,
+                controls: {
+                    up: 'KeyW',
+                    down: 'KeyS',
+                    left: 'KeyA',
+                    right: 'KeyD',
+                    fire: 'KeyF'
+                },
+                powerups: {},
+                name: gameMode === 'pve' ? 'Бот' : 'Игрок 2'
+            }
+        ];
+
+        // Пули
+        const bullets = [];
+
+        // Препятствия (детализированная карта)
+        const obstacles = generateMap();
+
+        // Усиления
+        const powerupTypes = [
+            { color: '#FFEB3B', type: 'triple', duration: 7000, name: 'Тройной выстрел' },
+            { color: '#4CAF50', type: 'health', duration: 0, name: 'Ремкомплект' },
+            { color: '#9C27B0', type: 'speed', duration: 10000, name: 'Ускорение' },
+            { color: '#FF9800', type: 'shield', duration: 8000, name: 'Щит' },
+            { color: '#00BCD4', type: 'rapid', duration: 6000, name: 'Скорострельность' }
+        ];
+
+        // Генератор карты
+        function generateMap() {
+            const map = [];
+            
+            // Границы карты
+            map.push({ x: 0, y: 0, width: canvas.width, height: 20, indestructible: true }); // верх
+            map.push({ x: 0, y: 0, width: 20, height: canvas.height, indestructible: true }); // лево
+            map.push({ x: canvas.width-20, y: 0, width: 20, height: canvas.height, indestructible: true }); // право
+            map.push({ x: 0, y: canvas.height-20, width: canvas.width, height: 20, indestructible: true }); // низ
+            
+            // Центральные конструкции
+            map.push({ x: 300, y: 150, width: 40, height: 200, color: '#5D4037' });
+            map.push({ x: 300, y: 400, width: 200, height: 40, color: '#5D4037' });
+            map.push({ x: 660, y: 150, width: 40, height: 200, color: '#5D4037' });
+            map.push({ x: 500, y: 400, width: 200, height: 40, color: '#5D4037' });
+            
+            // Четыре угловых блока
+            map.push({ x: 150, y: 350, width: 100, height: 40, color: '#6D4C41' });
+            map.push({ x: 750, y: 350, width: 100, height: 40, color: '#6D4C41' });
+            map.push({ x: 450, y: 150, width: 40, height: 100, color: '#6D4C41' });
+            map.push({ x: 450, y: 450, width: 40, height: 100, color: '#6D4C41' });
+            
+            // Разрушаемые блоки (в случайных местах)
+            for (let i = 0; i < 15; i++) {
+                const x = Math.floor(Math.random() * (canvas.width - 100)) + 20;
+                const y = Math.floor(Math.random() * (canvas.height - 100)) + 20;
+                
+                // Проверяем, чтобы не перекрывало важные зоны
+                let validPosition = true;
+                for (let obs of map) {
+                    if (Math.abs(x - obs.x) < 100 && Math.abs(y - obs.y) < 100) {
+                        validPosition = false;
+                        break;
+                    }
+                }
+                
+                if (validPosition) {
+                    map.push({ 
+                        x: x, 
+                        y: y, 
+                        width: 40, 
+                        height: 40, 
+                        color: '#8D6E63',
+                        health: 3,
+                        maxHealth: 3,
+                        destructible: true
+                    });
+                }
+            }
+            
+            return map;
+        }
+
+        // Обработка ввода
+        window.addEventListener('keydown', (e) => {
+            if (!keys[e.code]) { // Предотвращаем "залипание" при быстром нажатии
+                keys[e.code] = true;
+                
+                // Звук движения (при первом нажатии)
+                if ([
+                    'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight',
+                    'KeyW', 'KeyS', 'KeyA', 'KeyD'
+                ].includes(e.code)) {
+                    playSound('move', 0.3);
+                }
+            }
+        });
+        
+        window.addEventListener('keyup', (e) => keys[e.code] = false);
+
+        // Звуковые эффекты
+        const sounds = {
+            move: { count: 3, volume: 0.4 },
+            shoot: { count: 2, volume: 0.3 },
+            explosion: { count: 2, volume: 0.6 },
+            powerup: { count: 1, volume: 0.7 },
+            hit: { count: 2, volume: 0.5 }
+        };
+
+        function playSound(type, volume = 1) {
+            // В реальной реализации здесь было бы воспроизведение звука
+            // Для примера просто выведем в консоль
+            console.log(`Playing sound: ${type} at volume ${volume}`);
+        }
+
+        // Запуск игры
+        function startGame(mode) {
+            gameMode = mode;
+            menu.style.display = 'none';
+            canvas.style.display = 'block';
+            
+            // Обновляем имя второго танка
+            tanks[1].name = mode === 'pve' ? 'Бот' : 'Игрок 2';
+            
+            // Сброс состояния игры
+            resetGame();
+            
+            // Если режим с ботом - запускаем ИИ
+            if (mode === 'pve') {
+                clearInterval(botInterval);
+                botInterval = setInterval(() => botAI(), 100);
+            }
+            
+            gameLoop();
+        }
+
+        // Улучшенный ИИ бота
+        function botAI() {
+            const bot = tanks[1];
+            const player = tanks[0];
+            
+            if (bot.health <= 0) return;
+            
+            // 1. Проверка состояния
+            const now = Date.now();
+            const isDanger = distanceBetween(bot, player) < 300 && player.health > 0;
+            const hasShield = bot.powerups.shield && bot.powerups.shield > now;
+            const lowHealth = bot.health < bot.maxHealth * 0.4;
+            
+            // 2. Принятие решения
+            let action;
+            
+            if (lowHealth && !hasShield) {
+                // Режим выживания - ищем аптечки
+                const healthPowerup = findNearestPowerup(bot, 'health');
+                if (healthPowerup) {
+                    action = { type: 'move', target: healthPowerup };
+                } else {
+                    action = { type: 'evade', target: player };
+                }
+            } else if (Math.random() < botDifficulty * 0.5 && !hasShield) {
+                // Случайное поведение для разнообразия
+                action = Math.random() < 0.7 ? 
+                    { type: 'attack', target: player } : 
+                    { type: 'collect', target: null };
+            } else {
+                // Стандартное поведение
+                if (isDanger && Math.random() < botDifficulty) {
+                    action = { type: 'attack', target: player };
+                } else {
+                    action = { type: 'collect', target: null };
+                }
+            }
+            
+            // 3. Выполнение действия
+            switch (action.type) {
+                case 'attack':
+                    // Умная стрельба с упреждением
+                    const predictX = player.x + player.width/2 + Math.cos(player.direction) * 50;
+                    const predictY = player.y + player.height/2 + Math.sin(player.direction) * 50;
+                    
+                    const angle = Math.atan2(
+                        predictY - (bot.y + bot.height/2),
+                        predictX - (bot.x + bot.width/2)
+                    );
+                    
+                    bot.direction = angle;
+                    
+                    // Движение с уклонением
+                    const evadeAngle = angle + (Math.random() > 0.5 ? Math.PI/2 : -Math.PI/2);
+                    bot.x += Math.cos(evadeAngle) * bot.speed * 0.7;
+                    bot.y += Math.sin(evadeAngle) * bot.speed * 0.7;
+                    
+                    // Стрельба
+                    if (bot.cooldown === 0 && Math.random() < botDifficulty * 0.8) {
+                        if (bot.powerups.triple) {
+                            for (let i = -1; i <= 1; i++) {
+                                bullets.push(createBullet(bot, angle + i * 0.3));
+                            }
+                        } else {
+                            bullets.push(createBullet(bot, angle));
+                        }
+                        bot.cooldown = bot.powerups.rapid ? 10 : 20;
+                        playSound('shoot', 0.4);
+                    }
+                    break;
+                    
+                case 'move':
+                    moveToTarget(bot, action.target);
+                    break;
+                    
+                case 'evade':
+                    // Уклонение от игрока
+                    const evadeDir = Math.atan2(
+                        bot.y - player.y,
+                        bot.x - player.x
+                    );
+                    
+                    bot.x += Math.cos(evadeDir) * bot.speed;
+                    bot.y += Math.sin(evadeDir) * bot.speed;
+                    bot.direction = evadeDir;
+                    break;
+                    
+                case 'collect':
+                default:
+                    // Сбор усилений или атака
+                    const powerup = findNearestPowerup(bot);
+                    if (powerup && Math.random() < 0.8) {
+                        moveToTarget(bot, powerup);
+                    } else {
+                        // Патрулирование
+                        if (!bot.patrolTarget || distanceBetween(bot, bot.patrolTarget) < 50) {
+                            bot.patrolTarget = {
+                                x: Math.random() * (canvas.width - 100) + 50,
+                                y: Math.random() * (canvas.height - 100) + 50
+                            };
+                        }
+                        moveToTarget(bot, bot.patrolTarget);
+                    }
+            }
+            
+            // Ограничение движения
+            bot.x = Math.max(20, Math.min(canvas.width - bot.width - 20, bot.x));
+            bot.y = Math.max(20, Math.min(canvas.height - bot.height - 20, bot.y));
+            
+            // Обход препятствий
+            avoidObstacles(bot);
+        }
+
+        function findNearestPowerup(bot, filterType = null) {
+            let nearest = null;
+            let minDist = Infinity;
+            
+            powerups.forEach(powerup => {
+                if (filterType && powerup.type !== filterType) return;
+                
+                const dist = distanceBetween(bot, powerup);
+                if (dist < minDist) {
+                    minDist = dist;
+                    nearest = powerup;
+                }
+            });
+            
+            return nearest;
+        }
+
+        function moveToTarget(tank, target) {
+            const tx = target.x + (target.width || 0)/2;
+            const ty = target.y + (target.height || 0)/2;
+            const bx = tank.x + tank.width/2;
+            const by = tank.y + tank.height/2;
+            
+            const angle = Math.atan2(ty - by, tx - bx);
+            tank.direction = angle;
+            
+            const speed = tank.speed * (tank.powerups.speed ? 1.7 : 1);
+            tank.x += Math.cos(angle) * speed;
+            tank.y += Math.sin(angle) * speed;
+        }
+
+        function avoidObstacles(tank) {
+            const futureX = tank.x + Math.cos(tank.direction) * 50;
+            const futureY = tank.y + Math.sin(tank.direction) * 50;
+            
+            for (let obs of obstacles) {
+                if (obs.indestructible && checkCollision({
+                    x: futureX,
+                    y: futureY,
+                    width: tank.width,
+                    height: tank.height
+                }, obs)) {
+                    // Изменение направления для обхода
+                    tank.direction += Math.PI/2 * (Math.random() > 0.5 ? 1 : -1);
+                    tank.x += Math.cos(tank.direction) * tank.speed;
+                    tank.y += Math.sin(tank.direction) * tank.speed;
+                    break;
+                }
+            }
+        }
+
+        function distanceBetween(obj1, obj2) {
+            const x1 = obj1.x + (obj1.width || 0)/2;
+            const y1 = obj1.y + (obj1.height || 0)/2;
+            const x2 = obj2.x + (obj2.width || 0)/2;
+            const y2 = obj2.y + (obj2.height || 0)/2;
+            
+            return Math.sqrt(Math.pow(x2 - x1, 2) + Math.pow(y2 - y1, 2));
+        }
+
+        // Основной цикл игры
+        function gameLoop() {
+            if (gameOver) return;
+            
+            update();
+            render();
+            requestAnimationFrame(gameLoop);
+        }
+
+        // Обновление игрового состояния
+        function update() {
+            // Обновление танков
+            tanks.forEach((tank, index) => {
+                if (tank.health <= 0) return;
+                
+                // Управление только для игрока (в режиме PVE бот управляется ИИ)
+                if (gameMode === 'pvp' || index === 0) {
+                    // Движение
+                    let moved = false;
+                    let moveSound = false;
+                    
+                    if (keys[tank.controls.up]) {
+                        tank.direction = 0;
+                        tank.y -= tank.speed * (tank.powerups.speed ? 1.7 : 1);
+                        moved = true;
+                    }
+                    if (keys[tank.controls.down]) {
+                        tank.direction = Math.PI;
+                        tank.y += tank.speed * (tank.powerups.speed ? 1.7 : 1);
+                        moved = true;
+                    }
+                    if (keys[tank.controls.left]) {
+                        tank.direction = -Math.PI/2;
+                        tank.x -= tank.speed * (tank.powerups.speed ? 1.7 : 1);
+                        moved = true;
+                    }
+                    if (keys[tank.controls.right]) {
+                        tank.direction = Math.PI/2;
+                        tank.x += tank.speed * (tank.powerups.speed ? 1.7 : 1);
+                        moved = true;
+                    }
+                    
+                    if (moved && !moveSound) {
+                        playSound('move', 0.3);
+                        moveSound = true;
+                    }
+                    
+                    // Ограничение движения
+                    tank.x = Math.max(20, Math.min(canvas.width - tank.width - 20, tank.x));
+                    tank.y = Math.max(20, Math.min(canvas.height - tank.height - 20, tank.y));
+                    
+                    // Стрельба
+                    if (tank.cooldown > 0) tank.cooldown--;
+                    
+                    if (keys[tank.controls.fire] && tank.cooldown === 0) {
+                        if (tank.powerups.triple) {
+                            for (let i = -1; i <= 1; i++) {
+                                bullets.push(createBullet(tank, tank.direction + i * 0.3));
+                            }
+                        } else {
+                            bullets.push(createBullet(tank, tank.direction));
+                        }
+                        tank.cooldown = tank.powerups.rapid ? 8 : 20;
+                        playSound('shoot', 0.5);
+                    }
+                }
+                
+                // Проверка столкновений с препятствиями
+                for (let obs of obstacles) {
+                    if (checkCollision(tank, obs)) {
+                        // Отталкивание от препятствий
+                        tank.x -= Math.cos(tank.direction) * tank.speed;
+                        tank.y -= Math.sin(tank.direction) * tank.speed;
+                    }
+                }
+                
+                // Проверка столкновений с усилениями
+                for (let i = powerups.length - 1; i >= 0; i--) {
+                    const powerup = powerups[i];
+                    if (checkCollision(tank, powerup)) {
+                        applyPowerup(tank, powerup.type, powerup.duration);
+                        powerups.splice(i, 1);
+                        createParticles(powerup.x + 10, powerup.y + 10, powerup.color);
+                        playSound('powerup', 0.7);
+                        
+                        // Временное сообщение о получении усиления
+                        if (gameMode === 'pvp' || index === 0) {
+                            showMessage(tank.name + ' получил: ' + powerup.name, powerup.color);
+                        }
+                    }
+                }
+            });
+            
+            // Обновление пуль
+            for (let i = bullets.length - 1; i >= 0; i--) {
+                const bullet = bullets[i];
+                bullet.x += Math.cos(bullet.direction) * bullet.speed;
+                bullet.y += Math.sin(bullet.direction) * bullet.speed;
+                
+                // Проверка выхода за границы
+                if (bullet.x < 0 || bullet.x > canvas.width || 
+                    bullet.y < 0 || bullet.y > canvas.height) {
+                    bullets.splice(i, 1);
+                    continue;
+                }
+                
+                // Проверка столкновений с препятствиями
+                let hitObstacle = false;
+                for (let j = 0; j < obstacles.length; j++) {
+                    const obs = obstacles[j];
+                    if (checkCollision(bullet, obs)) {
+                        if (obs.destructible) {
+                            // Повреждение разрушаемых блоков
+                            obs.health--;
+                            if (obs.health <= 0) {
+                                createExplosion(obs.x + obs.width/2, obs.y + obs.height/2, '#8D6E63');
+                                obstacles.splice(j, 1);
+                            }
+                        }
+                        bullets.splice(i, 1);
+                        createParticles(bullet.x, bullet.y, '#FFFFFF');
+                        hitObstacle = true;
+                        playSound('hit', 0.4);
+                        break;
+                    }
+                }
+                if (hitObstacle) continue;
+                
+                // Проверка попадания в танки
+                for (let j = 0; j < tanks.length; j++) {
+                    const tank = tanks[j];
+                    if (j !== bullet.owner && checkCollision(bullet, tank) && 
+                        !(tank.powerups.shield && tank.powerups.shield > Date.now())) {
+                        bullets.splice(i, 1);
+                        
+                        if (tank.powerups.shield) {
+                            // Эффект щита
+                            createParticles(bullet.x, bullet.y, '#00BCD4');
+                        } else {
+                            tank.health--;
+                            createParticles(bullet.x, bullet.y, tank.color);
+                            playSound('hit', 0.6);
+                            
+                            if (tank.health <= 0) {
+                                // Уничтожение танка
+                                createExplosion(tank.x + tank.width/2, tank.y + tank.height/2, tank.color);
+                                tanks[bullet.owner].score++;
+                                updateUI();
+                                playSound('explosion', 0.8);
+                                
+                                // Временное сообщение
+                                showMessage(tanks[bullet.owner].name + ' уничтожил ' + tank.name, '#FF5722');
+                                
+                                // Респавн
+                                setTimeout(() => {
+                                    tank.health = tank.maxHealth;
+                                    tank.x = j === 0 ? 150 : 850;
+                                    tank.y = j === 0 ? 150 : 550;
+                                    tank.powerups = {};
+                                }, 1500);
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
+            
+            // Обновление частиц
+            for (let i = particles.length - 1; i >= 0; i--) {
+                const particle = particles[i];
+                particle.x += particle.vx;
+                particle.y += particle.vy;
+                particle.life--;
+                
+                if (particle.life <= 0) {
+                    particles.splice(i, 1);
+                }
+            }
+            
+            // Обновление усилений
+            const now = Date.now();
+            if (now - lastPowerupTime > 8000 && powerups.length < 4) {
+                spawnPowerup();
+                lastPowerupTime = now;
+            }
+            
+            // Удаление закончившихся усилений
+            tanks.forEach(tank => {
+                for (let type in tank.powerups) {
+                    if (tank.powerups[type] <= now) {
+                        delete tank.powerups[type];
+                    }
+                }
+            });
+        }
+
+        // Временные сообщения
+        let message = '';
+        let messageColor = '#FFF';
+        let messageTime = 0;
+        
+        function showMessage(text, color) {
+            message = text;
+            messageColor = color;
+            messageTime = 180; // 3 секунды при 60 FPS
+        }
+
+        // Отрисовка игры
+        function render() {
+            // Очистка экрана
+            ctx.fillStyle = '#121212';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            // Сетка фона
+            ctx.strokeStyle = 'rgba(50, 50, 50, 0.3)';
+            ctx.lineWidth = 1;
+            const gridSize = 40;
+            for (let x = 0; x < canvas.width; x += gridSize) {
+                ctx.beginPath();
+                ctx.moveTo(x, 0);
+                ctx.lineTo(x, canvas.height);
+                ctx.stroke();
+            }
+            for (let y = 0; y < canvas.height; y += gridSize) {
+                ctx.beginPath();
+                ctx.moveTo(0, y);
+                ctx.lineTo(canvas.width, y);
+                ctx.stroke();
+            }
+            
+            // Отрисовка препятствий
+            obstacles.forEach(obs => {
+                ctx.fillStyle = obs.color || '#5D4037';
+                ctx.fillRect(obs.x, obs.y, obs.width, obs.height);
+                
+                // Полоска здоровья для разрушаемых блоков
+                if (obs.destructible) {
+                    ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
+                    ctx.fillRect(obs.x, obs.y - 8, obs.width, 5);
+                    
+                    ctx.fillStyle = '#4CAF50';
+                    const healthWidth = (obs.health / obs.maxHealth) * obs.width;
+                    ctx.fillRect(obs.x, obs.y - 8, healthWidth, 5);
+                }
+            });
+            
+            // Отрисовка усилений
+            powerups.forEach(powerup => {
+                ctx.fillStyle = powerup.color;
+                ctx.beginPath();
+                ctx.arc(powerup.x + 10, powerup.y + 10, 10, 0, Math.PI * 2);
+                ctx.fill();
+                
+                // Эффект свечения
+                ctx.shadowColor = powerup.color;
+                ctx.shadowBlur = 15;
+                ctx.beginPath();
+                ctx.arc(powerup.x + 10, powerup.y + 10, 5, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.shadowBlur = 0;
+                
+                // Анимация подскакивания
+                const bounce = Math.sin(Date.now() / 200) * 3;
+                ctx.fillStyle = 'white';
+                ctx.font = 'bold 12px Arial';
+                ctx.textAlign = 'center';
+                ctx.fillText(powerup.name.charAt(0), powerup.x + 10, powerup.y + 12 + bounce);
+            });
+            
+            // Отрисовка танков
+            tanks.forEach((tank, index) => {
+                if (tank.health <= 0) return;
+                
+                ctx.save();
+                ctx.translate(tank.x + tank.width/2, tank.y + tank.height/2);
+                ctx.rotate(tank.direction);
+                
+                // Эффект щита
+                if (tank.powerups.shield && tank.powerups.shield > Date.now()) {
+                    ctx.strokeStyle = '#00BCD4';
+                    ctx.lineWidth = 3;
+                    ctx.beginPath();
+                    ctx.arc(0, 0, 30, 0, Math.PI * 2);
+                    ctx.stroke();
+                    
+                    // Пульсация щита
+                    const shieldPulse = 0.8 + Math.sin(Date.now() / 200) * 0.2;
+                    ctx.globalAlpha = 0.3;
+                    ctx.beginPath();
+                    ctx.arc(0, 0, 30 * shieldPulse, 0, Math.PI * 2);
+                    ctx.fillStyle = '#00BCD4';
+                    ctx.fill();
+                    ctx.globalAlpha = 1;
+                }
+                
+                // Корпус танка
+                ctx.fillStyle = tank.color;
+                ctx.fillRect(-tank.width/2, -tank.height/2, tank.width, tank.height);
+                
+                // Башня
+                ctx.fillStyle = '#333';
+                ctx.fillRect(10, -5, 20, 10);
+                
+                // Эффект усиления скорости
+                if (tank.powerups.speed) {
+                    ctx.strokeStyle = '#9C27B0';
+                    ctx.lineWidth = 2;
+                    ctx.strokeRect(-tank.width/2 - 2, -tank.height/2 - 2, tank.width + 4, tank.height + 4);
+                    
+                    // Эффект движения
+                    if (keys[tank.controls.up] || keys[tank.controls.down] || 
+                        keys[tank.controls.left] || keys[tank.controls.right] ||
+                        (gameMode === 'pve' && index === 1)) {
+                        ctx.fillStyle = 'rgba(156, 39, 176, 0.3)';
+                        ctx.beginPath();
+                        ctx.moveTo(-tank.width/2, tank.height/2);
+                        ctx.lineTo(tank.width/2, tank.height/2);
+                        ctx.lineTo(0, tank.height/2 + 15);
+                        ctx.closePath();
+                        ctx.fill();
+                    }
+                }
+                
+                // Эффект тройного выстрела
+                if (tank.powerups.triple) {
+                    ctx.fillStyle = 'rgba(255, 235, 59, 0.3)';
+                    ctx.beginPath();
+                    ctx.arc(0, 0, 30, -Math.PI/4, Math.PI/4);
+                    ctx.lineTo(0, 0);
+                    ctx.fill();
+                }
+                
+                ctx.restore();
+                
+                // Отображение здоровья
+                const healthWidth = (tank.health / tank.maxHealth) * tank.width;
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+                ctx.fillRect(tank.x, tank.y - 15, tank.width, 8);
+                
+                ctx.fillStyle = tank.health > tank.maxHealth * 0.6 ? '#4CAF50' : 
+                               tank.health > tank.maxHealth * 0.3 ? '#FFC107' : '#F44336';
+                ctx.fillRect(tank.x, tank.y - 15, healthWidth, 8);
+                
+                // Имя игрока/бота
+                ctx.fillStyle = 'white';
+                ctx.font = 'bold 12px Arial';
+                ctx.textAlign = 'center';
+                ctx.fillText(tank.name, tank.x + tank.width/2, tank.y - 20);
+            });
+            
+            // Отрисовка пуль
+            ctx.fillStyle = '#FFF';
+            bullets.forEach(bullet => {
+                ctx.beginPath();
+                ctx.arc(bullet.x, bullet.y, bullet.width/2, 0, Math.PI * 2);
+                ctx.fill();
+                
+                // Эффект следа
+                ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                ctx.moveTo(bullet.x, bullet.y);
+                ctx.lineTo(
+                    bullet.x - Math.cos(bullet.direction) * 10,
+                    bullet.y - Math.sin(bullet.direction) * 10
+                );
+                ctx.stroke();
+            });
+            
+            // Отрисовка частиц
+            particles.forEach(particle => {
+                ctx.fillStyle = particle.color;
+                ctx.globalAlpha = particle.life / 100;
+                ctx.fillRect(particle.x, particle.y, particle.size || 3, particle.size || 3);
+                ctx.globalAlpha = 1;
+            });
+            
+            // Отрисовка сообщения
+            if (messageTime > 0) {
+                messageTime--;
+                ctx.fillStyle = messageColor;
+                ctx.font = 'bold 24px Arial';
+                ctx.textAlign = 'center';
+                ctx.shadowColor = 'black';
+                ctx.shadowBlur = 5;
+                ctx.fillText(message, canvas.width/2, 50);
+                ctx.shadowBlur = 0;
+            }
+        }
+
+        // Вспомогательные функции
+        function checkCollision(obj1, obj2) {
+            return obj1.x < obj2.x + obj2.width &&
+                   obj1.x + (obj1.width || 0) > obj2.x &&
+                   obj1.y < obj2.y + obj2.height &&
+                   obj1.y + (obj1.height || 0) > obj2.y;
+        }
+
+        function createBullet(tank, direction) {
+            return {
+                x: tank.x + tank.width/2 + Math.cos(direction) * 25,
+                y: tank.y + tank.height/2 + Math.sin(direction) * 25,
+                width: 6,
+                height: 6,
+                speed: 9,
+                direction: direction,
+                owner: tanks.indexOf(tank)
+            };
+        }
+
+        function spawnPowerup() {
+            const type = powerupTypes[Math.floor(Math.random() * powerupTypes.length)];
+            const size = 20;
+            
+            // Проверяем, чтобы не появилось на препятствии
+            let x, y, validPosition;
+            let attempts = 0;
+            
+            do {
+                x = Math.floor(Math.random() * (canvas.width - size - 40)) + 20;
+                y = Math.floor(Math.random() * (canvas.height - size - 40)) + 20;
+                validPosition = true;
+                
+                // Проверка столкновений с препятствиями
+                for (let obs of obstacles) {
+                    if (checkCollision({ x, y, width: size, height: size }, obs)) {
+                        validPosition = false;
+                        break;
+                    }
+                }
+                
+                // Проверка расстояния до танков
+                if (validPosition) {
+                    for (let tank of tanks) {
+                        if (distanceBetween({ x, y }, tank) < 100) {
+                            validPosition = false;
+                            break;
+                        }
+                    }
+                }
+                
+                attempts++;
+                if (attempts > 50) return; // Защита от бесконечного цикла
+            } while (!validPosition);
+            
+            powerups.push({
+                x: x,
+                y: y,
+                width: size,
+                height: size,
+                color: type.color,
+                type: type.type,
+                duration: type.duration,
+                name: type.name
+            });
+        }
+
+        function applyPowerup(tank, type, duration) {
+            const now = Date.now();
+            tank.powerups[type] = now + duration;
+            
+            switch (type) {
+                case 'health':
+                    tank.health = Math.min(tank.maxHealth + 1, tank.health + 2);
+                    break;
+                case 'shield':
+                    // Дополнительный эффект при получении щита
+                    for (let i = 0; i < 30; i++) {
+                        particles.push({
+                            x: tank.x + tank.width/2,
+                            y: tank.y + tank.height/2,
+                            vx: Math.random() * 6 - 3,
+                            vy: Math.random() * 6 - 3,
+                            color: '#00BCD4',
+                            life: 40 + Math.random() * 40,
+                            size: 2 + Math.random() * 4
+                        });
+                    }
+                    break;
+            }
+        }
+
+        function createParticles(x, y, color, count = 20) {
+            for (let i = 0; i < count; i++) {
+                particles.push({
+                    x: x,
+                    y: y,
+                    vx: Math.random() * 6 - 3,
+                    vy: Math.random() * 6 - 3,
+                    color: color,
+                    life: 30 + Math.random() * 50,
+                    size: 2 + Math.random() * 3
+                });
+            }
+        }
+
+        function createExplosion(x, y, color) {
+            for (let i = 0; i < 60; i++) {
+                particles.push({
+                    x: x,
+                    y: y,
+                    vx: Math.random() * 10 - 5,
+                    vy: Math.random() * 10 - 5,
+                    color: color || ['#FF5722', '#FFEB3B', '#FF9800'][Math.floor(Math.random() * 3)],
+                    life: 50 + Math.random() * 100,
+                    size: 1 + Math.random() * 5
+                });
+            }
+            
+            // Большие частицы в центре
+            for (let i = 0; i < 10; i++) {
+                particles.push({
+                    x: x,
+                    y: y,
+                    vx: Math.random() * 4 - 2,
+                    vy: Math.random() * 4 - 2,
+                    color: 'white',
+                    life: 30 + Math.random() * 40,
+                    size: 5 + Math.random() * 8
+                });
+            }
+        }
+
+        function updateUI() {
+            ui.textContent = `${tanks[0].name}: ${tanks[0].score} | ${tanks[1].name}: ${tanks[1].score}`;
+        }
+
+        function resetGame() {
+            // Сброс всех параметров
+            tanks[0].x = 150;
+            tanks[0].y = 150;
+            tanks[0].health = tanks[0].maxHealth;
+            tanks[0].score = 0;
+            tanks[0].powerups = {};
+            
+            tanks[1].x = 850;
+            tanks[1].y = 550;
+            tanks[1].health = tanks[1].maxHealth;
+            tanks[1].score = 0;
+            tanks[1].powerups = {};
+            
+            bullets.length = 0;
+            powerups.length = 0;
+            particles.length = 0;
+            
+            // Генерация новой карты
+            obstacles.length = 0;
+            obstacles.push(...generateMap());
+            
+            spawnPowerup();
+            updateUI();
+        }
+
+        // Запуск игры при загрузке
+        window.addEventListener('load', () => {
+            updateUI();
+        });
+    </script>
+</body>
+</html>
